@@ -1,0 +1,105 @@
+# Vehicle Number Plate Detection and Cropping (Digital Image Processing)
+
+A robust, classical Digital Image Processing (DIP) pipeline built in MATLAB to automatically locate, verify, and crop vehicle license plates from both close-up images and complex, cluttered street scenes. 
+
+---
+
+##  Overview & Key Features
+
+Detecting number plates in busy street environments is challenging due to varying lighting conditions, shadows, background clutter (buildings, signs, grilles), and perspective distortion. This project solves this without deep learning by combining **two independent visual cues** with a **structural character verification algorithm**:
+
+- **Dual-Cue Candidate Generation:**
+  - **Cue A (Color Segmentation):** Identifies commercial/yellow license plates in the HSV color space, tuned to handle sunlit and washed-out conditions.
+  - **Cue B (Edge & Texture Morphology):** Uses vertical Sobel edge detection, morphological top-hat filtering, and closing/opening operations to isolate high-contrast character regions (effective for both white and yellow plates).
+- **Character-Structure Verification:** Eliminates false positives (such as car grilles, road signs, and building windows) by counting horizontal dark-to-light stroke transitions across the middle rows of every candidate bounding box.
+- **Full-Resolution Cropping:** Performs detection on a normalized image for consistent morphological behavior, then maps coordinates back to the original high-resolution image for crisp output extraction.
+- **Optional OCR Integration:** Includes fallback support for MATLAB's Computer Vision Toolbox (`ocr`) to automatically read alphanumeric characters from the cropped plate.
+
+---
+
+##  Requirements
+
+- **MATLAB** (R2019b or newer recommended)
+- **Image Processing Toolbox** *(Required)*
+- **Computer Vision Toolbox** *(Optional — used only if OCR character recognition is enabled)*
+- **Supported Image Formats:** `.jpg`, `.jpeg`, `.png`, `.bmp`, `.tif`, `.tiff`
+
+---
+
+##  How to Run
+
+1. Open MATLAB and navigate to the project directory.
+2. Open the main script (`plate_detection.m`).
+3. Run the script:
+   - **Interactive Mode (Default):** Leave `imageFile = '';` empty and press **Run**. A file picker dialog will appear allowing you to select any vehicle image from your computer.
+   - **Direct Path Mode:** Set the `imageFile` variable on Line 21 to your image path (e.g., `imageFile = 'C:\Images\car.jpg';`).
+4. **Outputs:**
+   - A 6-panel figure window illustrating each stage of the pipeline.
+   - The cropped license plate automatically saved to your working directory as **`detected_plate.png`**.
+
+---
+
+##  Algorithm Pipeline
+
+The detection workflow is divided into six sequential stages:
+
+### 1. Pre-Processing
+- The input RGB image is resized to a standard width ($W = 900\text{ px}$) using bilinear interpolation to keep morphological structuring element sizes scale-invariant.
+- Converted to **HSV color space** ($H, S, V$ channels) for color segmentation.
+- Converted to **Grayscale**, filtered with a $3 \times 3$ median filter (`medfilt2`) to remove impulse noise, and enhanced using Contrast-Limited Adaptive Histogram Equalization (`adapthisteq` / CLAHE).
+
+### 2. Cue A: HSV Yellow Plate Mask
+- Targets yellow commercial plates using relaxed saturation thresholds to account for direct sunlight and dust:
+  $$0.08 \le H \le 0.23, \quad S \ge 0.22, \quad V \ge 0.30$$
+- Refined using morphological closing ($3 \times 11$ rectangle), hole filling (`imfill`), morphological opening ($2 \times 5$ rectangle), and minimum area filtering (`bwareaopen`).
+
+### 3. Cue B: Vertical Edges & Top-Hat Morphology
+- Computes vertical gradients using the Sobel operator:
+  $$G_x = \begin{bmatrix} -1 & 0 & 1 \\ -2 & 0 & 2 \\ -1 & 0 & 1 \end{bmatrix} * I_{\text{CLAHE}}$$
+- Applies a **morphological top-hat transform** (`imtophat`) followed by adaptive binarization to isolate fine vertical strokes and prevent the plate from merging into surrounding dark bumper grilles.
+- Merges adjacent characters into solid rectangular blobs via closing ($4 \times 18$) and opening ($2 \times 8$).
+
+### 4. Candidate Filtering & Character Verification
+Connected components from both Cue A and Cue B masks are evaluated against strict geometric and structural criteria:
+- **Aspect Ratio:** $1.6 \le \frac{w}{h} \le 6.5$
+- **Relative Area:** $0.0003 \le \frac{w \cdot h}{W \cdot H} \le 0.08$
+- **Vertical Position Prior:** Rejects candidates in the top $20\%$ of the frame ($\frac{y_1}{H} < 0.20$) where building awnings and street signs typically reside.
+- **Horizontal Stroke Transitions:** Locally thresholds the candidate region using a Gaussian-smoothed baseline ($\sigma = \frac{h-1}{6}$) and calculates the mean number of dark/light transitions ($T$) across the middle $50\%$ of rows. A valid license plate must satisfy $T \ge 7$.
+
+### 5. Candidate Scoring Formula
+Every verified candidate is assigned a confidence score combining stroke transitions ($T$), vertical edge density ($E_d$), yellow pixel fraction ($Y_f$), and vertical position weight ($P_w$):
+
+$$P_w = 0.5 + 0.5 \left(\frac{y_1}{H}\right)$$
+
+$$\text{Score} = \min(T, 25) \cdot E_d \cdot (1.0 + 5.0 \cdot Y_f) \cdot P_w$$
+
+The bounding box with the maximum score is selected as the final license plate.
+
+### 6. Full-Resolution Extraction
+- A safety margin ($10\%$ horizontal, $15\%$ vertical) is added around the winning bounding box.
+- Coordinates are scaled back by $\frac{1}{\text{scale}}$ and cropped directly from the original unscaled image (`orig`).
+
+---
+
+##  Visual Output Breakdown
+
+When the script completes, it generates a 6-subplot diagnostic figure:
+
+| Subplot | Title | Description |
+| :--- | :--- | :--- |
+| **1** | `1. Input (resized)` | The normalized RGB vehicle image. |
+| **2** | `2. Cue A: Yellow Mask (HSV)` | Binary mask isolating yellow plate regions. |
+| **3** | `3. Cue B: Edge/Texture Mask` | Binary mask from vertical Sobel edges + morphological filtering. |
+| **4** | `4. All Candidates (yellow)` | Bounding boxes of all regions that passed geometric and stroke verification. |
+| **5** | `5. Best Plate Box` | The highest-scoring candidate highlighted with a green bounding box. |
+| **6** | `6. Cropped Plate` | Final high-resolution license plate crop (e.g., `MH.01.EE.2388`). |
+
+---
+
+## Customization & Tuning
+
+If you are adapting this code for a specific camera setup or country's license plate standard, you can tweak these parameters in the script:
+
+- **Aspect Ratio (`ar`):** Adjust `ar < 1.6 || ar > 6.5` in Section 5 if working with square two-line motorcycle/truck plates.
+- **Transition Count (`trans`):** Lower `trans < 7` to `5` if detecting short vanity plates with fewer characters.
+- **Yellow Hue/Saturation (`yellowRaw`):** Modify `Hh` and `Ss` bounds in Section 3 if adapting for green (EV) or red plates.
